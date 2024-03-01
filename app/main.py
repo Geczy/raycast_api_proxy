@@ -55,6 +55,14 @@ async def shutdown_event():
     await http_client.aclose()
 
 
+def update_base_url(request: httpx.Request) -> None:
+    logger.debug(f"Updating base url for request: {request.url}")
+    # replace `/chat/completions` in the path with `/v1/chat/completions`
+    request.url = request.url.copy_with(
+        path=request.url.path.replace("/chat", "/v1/chat")
+    )
+
+
 openai.api_key = os.environ["OPENAI_API_KEY"]
 is_azure = openai.api_type in ("azure", "azure_ad", "azuread")
 if is_azure:
@@ -65,7 +73,14 @@ if is_azure:
     )
 else:
     logger.info("Using OpenAI API")
-    openai_client = openai.OpenAI()
+    openai_client = openai.OpenAI(
+        base_url="http://192.168.0.175:8080",
+        http_client=httpx.Client(
+            event_hooks={
+                "request": [update_base_url],
+            }
+        ),
+    )
 
 FORCE_MODEL = os.environ.get("FORCE_MODEL", None)
 
@@ -168,6 +183,10 @@ async def chat_completions(request: Request):
             stream=True,
         )
         for response in stream:
+            logger.debug(f"OpenAI response: {response}")
+            # choices could be an empty array, account for that case
+            if not response.choices:
+                continue
             chunk = response.choices[0]
             if chunk.finish_reason is not None:
                 logger.debug(f"OpenAI response finish: {chunk.finish_reason}")
@@ -262,6 +281,15 @@ async def proxy_models(request: Request):
                 "features": [],
             },
             {
+                "id": "openai-gpt-4.0",
+                "model": "gpt-4",
+                "name": "GPT-4.0",
+                "provider": "openai",
+                "provider_name": "OpenAI",
+                "requires_better_ai": True,
+                "features": [],
+            },
+            {
                 "id": "openai-gpt-4-1106-preview",
                 "model": "gpt-4-1106-preview",
                 "name": "GPT-4 Turbo",
@@ -272,10 +300,10 @@ async def proxy_models(request: Request):
             },
         ]
         data["default_models"] = {
-            "chat": "openai-gpt-3.5-turbo-1106",
-            "quick_ai": "openai-gpt-3.5-turbo-1106",
-            "commands": "openai-gpt-3.5-turbo-instruct",
-            "api": "openai-gpt-3.5-turbo-instruct",
+            "chat": "openai-gpt-4.0",
+            "quick_ai": "openai-gpt-4.0",
+            "commands": "openai-gpt-4.0",
+            "api": "openai-gpt-4.0",
         }
         content = json.dumps(data, ensure_ascii=False).encode("utf-8")
     return Response(
